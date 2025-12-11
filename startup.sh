@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Start all services in parallel
-python api.py &
+python app.py &
 python agent.py dev &
 python ./outboundService/entry.py dev &
 
