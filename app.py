@@ -129,6 +129,9 @@ conversation_threads: Dict[str, List[Dict]] = {}
 # Store service instances per thread (for maintaining session state)
 thread_services: Dict[str, Dict] = {}
 
+# Store detailed policy information per thread (for on-demand retrieval)
+thread_policy_details: Dict[str, Dict] = {}
+
 
 # ===========================
 # CHATBOT MODELS
@@ -339,26 +342,26 @@ def get_available_tools() -> List[Dict]:
         {
             "type": "function",
             "function": {
-                "name": "get_ams360_customer_policies",
-                "description": "Get all policies for a specific customer from AMS360.",
+                "name": "get_policy_by_number",
+                "description": "Get policy information or lookup for existing policy by policy number from AMS360. Returns basic/major information.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "customer_id": {"type": "string", "description": "AMS360 customer ID"}
+                        "policy_number": {"type": "string", "description": "The policy number to search for"}
                     },
-                    "required": ["customer_id"]
+                    "required": ["policy_number"]
                 }
             }
         },
         {
             "type": "function",
             "function": {
-                "name": "get_policy_by_number",
-                "description": "Get policy information or lookup for existing policy by policy number from AMS360.",
+                "name": "get_detailed_policy_info",
+                "description": "Get additional detailed information about a previously looked up policy (transactions, customer contact details, etc.).",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "policy_number": {"type": "string", "description": "The policy number to search for"}
+                        "policy_number": {"type": "string", "description": "The policy number to get details for"}
                     },
                     "required": ["policy_number"]
                 }
@@ -387,34 +390,6 @@ def get_available_tools() -> List[Dict]:
                         "appointment_requested": {"type": "boolean"}
                     },
                     "required": ["first_name", "last_name", "email", "phone", "insurance_type"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_agencyzoom_contact_by_phone",
-                "description": "Search for a contact in AgencyZoom by phone number.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "phone": {"type": "string", "description": "Phone number to search for"}
-                    },
-                    "required": ["phone"]
-                }
-            }
-        },
-        {
-            "type": "function",
-            "function": {
-                "name": "search_agencyzoom_contact_by_email",
-                "description": "Search for a contact in AgencyZoom by email address.",
-                "parameters": {
-                    "type": "object",
-                    "properties": {
-                        "email": {"type": "string", "description": "Email address to search for"}
-                    },
-                    "required": ["email"]
                 }
             }
         },
@@ -538,40 +513,34 @@ def execute_function_call(function_name: str, arguments: Dict, thread_id: str) -
                             return date_str.split('T')[0]
                         return date_str or 'N/A'
                     
-                    # Build user-friendly message
-                    message = f"✓ Found Policy in AMS360:\n\n"
-                    message += f"📋 Policy Number: {policy_info.get('PolicyNumber', 'N/A')}\n"
-                    message += f"📅 Effective Date: {format_date(policy_info.get('EffectiveDate'))}\n"
-                    message += f"📅 Expiration Date: {format_date(policy_info.get('ExpirationDate'))}\n"
-                    message += f"💼 Policy Type: {policy_info.get('PolicyTypeOfBusiness', 'N/A')}\n"
-                    message += f"📊 Line of Business: {policy_info.get('LineDescription', 'N/A')}\n"
-                    message += f"💰 Full Term Premium: ${policy_info.get('FullTermPremium', 'N/A')}\n"
-                    message += f"💳 Bill Method: {policy_info.get('BillMethod', 'N/A')}\n"
+                    # Store full details for later retrieval
+                    if thread_id not in thread_policy_details:
+                        thread_policy_details[thread_id] = {}
                     
-                    # Add latest transaction info if available
-                    if policy_info.get('LatestTransactionType'):
-                        message += f"\n📝 Latest Transaction:\n"
-                        message += f"   Type: {policy_info.get('LatestTransactionType', 'N/A')}\n"
-                        message += f"   Date: {format_date(policy_info.get('LatestTransactionDate'))}\n"
-                        message += f"   Premium: ${policy_info.get('LatestPremium', 'N/A')}\n"
+                    thread_policy_details[thread_id][arguments.get("policy_number")] = {
+                        "policy_info": policy_info,
+                        "customer_info": policy_id,
+                        "format_date": format_date
+                    }
                     
-                    # Add customer info if available
+                    # Extract customer info if available
+                    customer_name = "N/A"
                     if customer_data:
                         try:
-                            customer_info = extract_customer_fields(customer_data)
-                            message += f"\n👤 Customer Information:\n"
-                            message += f"   Name: {customer_info.get('FirstName', '')} {customer_info.get('LastName', '')}\n"
-                            message += f"   Customer ID: {customer_info.get('CustomerId', 'N/A')}\n"
-                            
-                            # Add contact info if available
-                            if customer_info.get('Email'):
-                                message += f"   Email: {customer_info.get('Email')}\n"
-                            if customer_info.get('CellPhone'):
-                                message += f"   Phone: {customer_info.get('CellAreaCode', '')}{customer_info.get('CellPhone', '')}\n"
-                            if customer_info.get('City') and customer_info.get('State'):
-                                message += f"   Location: {customer_info.get('City')}, {customer_info.get('State')}\n"
+                            customer_info = extract_customer_fields(policy_id)
+                            customer_name = f"{customer_info.get('FirstName', '')} {customer_info.get('LastName', '')}".strip()
                         except Exception as e:
-                            logger.warning(f"Could not extract customer details: {e}")
+                            logger.warning(f"Could not extract customer name: {e}")
+                    
+                    # Build simplified message with ONLY major/essential information
+                    message = f"✓ Found Policy in AMS360:\n\n"
+                    message += f"📋 Policy Number: {policy_info.get('PolicyNumber', 'N/A')}\n"
+                    message += f"👤 Customer: {customer_name}\n"
+                    message += f"💼 Policy Type: {policy_info.get('PolicyTypeOfBusiness', 'N/A')}\n"
+                    message += f"📅 Effective: {format_date(policy_info.get('EffectiveDate'))}\n"
+                    message += f"📅 Expires: {format_date(policy_info.get('ExpirationDate'))}\n"
+                    message += f"💰 Premium: ${policy_info.get('FullTermPremium', 'N/A')}\n"
+                    message += f"\n💡 Ask me if you need more details (transactions, contact info, etc.)"
                     
                     return message
                     
@@ -580,6 +549,57 @@ def execute_function_call(function_name: str, arguments: Dict, thread_id: str) -
                     return f"Found policy information in AMS360 for policy number {arguments.get('policy_number')}."
             else:
                 return f"❌ No policy found in AMS360 with policy number {arguments.get('policy_number')}."
+        
+        elif function_name == "get_detailed_policy_info":
+            policy_number = arguments.get("policy_number")
+            
+            # Check if we have stored details for this policy
+            if thread_id not in thread_policy_details or policy_number not in thread_policy_details[thread_id]:
+                return f"No cached details found for policy {policy_number}. Please look up the policy first using get_policy_by_number."
+            
+            stored_data = thread_policy_details[thread_id][policy_number]
+            policy_info = stored_data["policy_info"]
+            customer_data = stored_data["customer_data"]
+            format_date = stored_data["format_date"]
+            
+            from formating.full_policy import extract_customer_fields
+            
+            # Build detailed message
+            message = f"📋 Detailed Information for Policy {policy_number}:\n\n"
+            
+            # Additional policy details
+            message += f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            message += f"📊 POLICY DETAILS:\n"
+            message += f"   Line of Business: {policy_info.get('LineDescription', 'N/A')}\n"
+            message += f"   Bill Method: {policy_info.get('BillMethod', 'N/A')}\n"
+            message += f"   Status: {policy_info.get('PolicyStatus', 'N/A')}\n"
+            
+            # Latest transaction info if available
+            if policy_info.get('LatestTransactionType'):
+                message += f"\n📝 LATEST TRANSACTION:\n"
+                message += f"   Type: {policy_info.get('LatestTransactionType', 'N/A')}\n"
+                message += f"   Date: {format_date(policy_info.get('LatestTransactionDate'))}\n"
+                message += f"   Premium: ${policy_info.get('LatestPremium', 'N/A')}\n"
+            
+            # Customer contact info if available
+            if customer_data:
+                try:
+                    customer_info = extract_customer_fields(customer_data)
+                    message += f"\n👤 CUSTOMER CONTACT INFO:\n"
+                    message += f"   Name: {customer_info.get('FirstName', '')} {customer_info.get('LastName', '')}\n"
+                    message += f"   Customer ID: {customer_info.get('CustomerId', 'N/A')}\n"
+                    
+                    # Add contact info if available
+                    if customer_info.get('Email'):
+                        message += f"   Email: {customer_info.get('Email')}\n"
+                    if customer_info.get('CellPhone'):
+                        message += f"   Phone: {customer_info.get('CellAreaCode', '')}{customer_info.get('CellPhone', '')}\n"
+                    if customer_info.get('City') and customer_info.get('State'):
+                        message += f"   Location: {customer_info.get('City')}, {customer_info.get('State')}\n"
+                except Exception as e:
+                    logger.warning(f"Could not extract customer details: {e}")
+            
+            return message
         
         elif function_name == "get_ams360_customer_policies":
             from formating.full_policy import extract_policy_list
