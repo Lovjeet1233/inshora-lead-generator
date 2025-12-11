@@ -707,12 +707,12 @@ async def entrypoint(ctx: JobContext):
         #     speed=config.tts.speed,
         #     sample_rate=config.tts.sample_rate
         # )
-        tts_instance = elevenlabs.TTS(
+        tts = elevenlabs.TTS(
                 base_url="https://api.eu.residency.elevenlabs.io/v1",
-                voice_id=voice_id,
-                language=language,
+                voice_id="21m00Tcm4TlvDq8ikWAM",
+                language="en",
                 model="eleven_flash_v2_5"
-            )
+            ))
     
     logger.info("AgentSession configured successfully")
     
