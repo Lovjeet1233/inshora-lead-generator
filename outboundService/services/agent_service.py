@@ -872,25 +872,37 @@ WORKFLOW:
                     # Get MongoDB manager (singleton - don't close it)
                     mongodb_uri = os.getenv("MONGODB_URI")
                     if mongodb_uri:
-                        mongo_manager = get_mongodb_manager(mongodb_uri)
-                        
-                        # Build metadata with duration
-                        metadata = {
-                            "room_name": ctx.room.name if ctx.room else None,
-                            "timestamp": datetime.utcnow().isoformat()
-                        }
-                        if duration_seconds is not None:
-                            metadata["duration_seconds"] = duration_seconds
-                            metadata["duration_formatted"] = f"{duration_seconds // 60}m {duration_seconds % 60}s"
-                        
-                        transcript_id = mongo_manager.save_transcript(
-                            transcript=transcript_data,
-                            caller_id=caller_id,
-                            name=caller_name,
-                            contact_number=contact_number,
-                            metadata=metadata
-                        )
-                        logger.info(f"Transcript saved to MongoDB with ID: {transcript_id}")
+                        try:
+                            # Add timeout to MongoDB operations to prevent blocking
+                            async def save_to_mongo():
+                                mongo_manager = get_mongodb_manager(mongodb_uri)
+                                
+                                # Build metadata with duration
+                                metadata = {
+                                    "room_name": ctx.room.name if ctx.room else None,
+                                    "timestamp": datetime.utcnow().isoformat()
+                                }
+                                if duration_seconds is not None:
+                                    metadata["duration_seconds"] = duration_seconds
+                                    metadata["duration_formatted"] = f"{duration_seconds // 60}m {duration_seconds % 60}s"
+                                
+                                transcript_id = mongo_manager.save_transcript(
+                                    transcript=transcript_data,
+                                    caller_id=caller_id,
+                                    name=caller_name,
+                                    contact_number=contact_number,
+                                    metadata=metadata
+                                )
+                                return transcript_id
+                            
+                            # Set a timeout of 5 seconds for MongoDB save
+                            transcript_id = await asyncio.wait_for(save_to_mongo(), timeout=5.0)
+                            logger.info(f"Transcript saved to MongoDB with ID: {transcript_id}")
+                            
+                        except asyncio.TimeoutError:
+                            logger.error("MongoDB save operation timed out after 5 seconds - continuing cleanup")
+                        except Exception as mongo_error:
+                            logger.error(f"MongoDB connection/save error: {mongo_error} - continuing cleanup")
                     else:
                         logger.warning("MONGODB_URI not set, skipping MongoDB transcript save")
                 except Exception as mongo_error:

@@ -29,8 +29,18 @@ class MongoDBManager:
             database_name: Name of the database (default: "python")
         """
         try:
-            self.client = MongoClient(mongodb_uri)
-            # Test connection
+            # Initialize MongoDB with proper timeouts to prevent hanging
+            self.client = MongoClient(
+                mongodb_uri,
+                serverSelectionTimeoutMS=3000,  # 3 second timeout for server selection
+                connectTimeoutMS=3000,           # 3 second connection timeout
+                socketTimeoutMS=3000,            # 3 second socket timeout
+                maxPoolSize=10,                  # Connection pool size
+                retryWrites=True,                # Enable retry for write operations
+                w='majority'                     # Write concern for durability
+            )
+            
+            # Test connection with timeout
             self.client.admin.command('ping')
             self.db = self.client[database_name]
             
@@ -93,12 +103,16 @@ class MongoDBManager:
                 "metadata": metadata or {}
             }
             
+            # Insert with timeout protection via pymongo's socketTimeoutMS (set in __init__)
             result = self.transcripts_collection.insert_one(transcript_data)
             transcript_id = str(result.inserted_id)
             
             log_info(f"Saved transcript for caller: {name} (ID: {caller_id})")
             return transcript_id
             
+        except ConnectionFailure as e:
+            log_error(f"MongoDB connection failure while saving transcript: {str(e)}")
+            raise
         except Exception as e:
             log_exception(f"Error saving transcript: {str(e)}")
             raise
