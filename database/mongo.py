@@ -51,18 +51,6 @@ class MongoDBManager:
     def _create_indexes(self):
         """Create indexes for collections"""
         try:
-            # Indexes for instances collection
-            self.instances_collection.create_index("instance_id", unique=True)
-            self.instances_collection.create_index("created_at")
-            
-            # Indexes for chat_history collection
-            self.chat_history_collection.create_index("thread_id")
-            self.chat_history_collection.create_index("instance_id")
-            self.chat_history_collection.create_index("timestamp")
-            
-            # Indexes for checkpoints collection (managed by LangGraph MongoDBSaver)
-            # Note: LangGraph manages its own indexes for the checkpoints collection
-            
             # Indexes for transcripts collection
             self.transcripts_collection.create_index("caller_id")
             self.transcripts_collection.create_index("timestamp")

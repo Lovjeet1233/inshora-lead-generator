@@ -864,7 +864,7 @@ WORKFLOW:
                         duration_seconds = int(duration_delta.total_seconds())
                         logger.info(f"Call duration: {duration_seconds} seconds ({duration_delta})")
                     
-                    # Get MongoDB manager
+                    # Get MongoDB manager (singleton - don't close it)
                     mongodb_uri = os.getenv("MONGODB_URI")
                     if mongodb_uri:
                         mongo_manager = get_mongodb_manager(mongodb_uri)
@@ -1030,12 +1030,7 @@ WORKFLOW:
 
     # Multi-language greeting support
     greetings = {
-        "en": f"Hello {caller_name}, I'm your Assistant from Aistein.",
-        "it": f"Ciao {caller_name}, sono il tuo Assistente di Aistein.",
-        "es": f"Hola {caller_name}, soy tu Asistente de Aistein.",
-        "ar": f"مرحبا {caller_name}، أنا مساعدك من Aistein.",
-        "tr": f"Merhaba {caller_name}, ben Aistein'dan Asistanınızım.",
-        "hi": f"नमस्ते {caller_name}, मैं Aistein से आपका सहायक हूँ।"
+        "en": f"Hello {caller_name}, I'm  Insurance Assistant from Inshora Group.",
     }
     
     # Default to English if language not supported
