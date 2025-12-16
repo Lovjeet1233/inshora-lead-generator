@@ -171,8 +171,7 @@ def get_greeting_prompt(time_greeting: str) -> str:
     Returns:
         Formatted greeting instruction
     """
-    return f"""Say '{time_greeting}! Thank you for calling. I'm your AI insurance assistant. 
-    I can help you get quotes for home, auto, flood, life, or commercial insurance. 
-    Are you looking to add new insurance or update an existing policy?'
+    return f"""Say '{time_greeting}! Thank you for calling. I'm your AI insurance assistant from Inshora Group. 
+    Are you looking to add new insurance or looking up an existing policy?'
     Speak warmly and professionally at a moderate pace."""
 
