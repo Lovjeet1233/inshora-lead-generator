@@ -439,7 +439,7 @@ class TelephonyAgent(Agent):
         """Get policy information by policy number from AMS360.
         
         Args:
-            policy_number: The policy number to search for
+            policy_number: The policy number to search for, Please validate the policy number before calling this function.
         
         Returns:
             String message with policy information or error
@@ -464,13 +464,23 @@ class TelephonyAgent(Agent):
                             return date_str.split('T')[0]
                         return date_str or 'N/A'
                     
-                    # Build user-friendly message
+                    # Extract customer info if available
+                    customer_name = "N/A"
+                    if customer_data:
+                        try:
+                            customer_info = extract_customer_fields(customer_data)
+                            customer_name = f"{customer_info.get('FirstName', '')} {customer_info.get('LastName', '')}".strip()
+                        except Exception as e:
+                            logger.warning(f"Could not extract customer name: {e}")
+                    
+                    # Build simplified message with essential information
                     message = f"Found Policy in AMS360:\n\n"
                     message += f"Policy Number: {policy_info.get('PolicyNumber', 'N/A')}\n"
-                    message += f"Effective Date: {format_date(policy_info.get('EffectiveDate'))}\n"
-                    message += f"Expiration Date: {format_date(policy_info.get('ExpirationDate'))}\n"
+                    message += f"Policy Holder: {customer_name}\n"
                     message += f"Policy Type: {policy_info.get('PolicyTypeOfBusiness', 'N/A')}\n"
                     message += f"Line of Business: {policy_info.get('LineDescription', 'N/A')}\n"
+                    message += f"Effective Date: {format_date(policy_info.get('EffectiveDate'))}\n"
+                    message += f"Expiration Date: {format_date(policy_info.get('ExpirationDate'))}\n"
                     message += f"Full Term Premium: ${policy_info.get('FullTermPremium', 'N/A')}\n"
                     message += f"Bill Method: {policy_info.get('BillMethod', 'N/A')}\n"
                     
@@ -481,24 +491,6 @@ class TelephonyAgent(Agent):
                         message += f"   Date: {format_date(policy_info.get('LatestTransactionDate'))}\n"
                         message += f"   Premium: ${policy_info.get('LatestPremium', 'N/A')}\n"
                     
-                    # Add customer info if available
-                    if customer_data:
-                        try:
-                            customer_info = extract_customer_fields(customer_data)
-                            message += f"\nCustomer Information:\n"
-                            message += f"   Name: {customer_info.get('FirstName', '')} {customer_info.get('LastName', '')}\n"
-                            message += f"   Customer ID: {customer_info.get('CustomerId', 'N/A')}\n"
-                            
-                            # Add contact info if available
-                            if customer_info.get('Email'):
-                                message += f"   Email: {customer_info.get('Email')}\n"
-                            if customer_info.get('CellPhone'):
-                                message += f"   Phone: {customer_info.get('CellAreaCode', '')}{customer_info.get('CellPhone', '')}\n"
-                            if customer_info.get('City') and customer_info.get('State'):
-                                message += f"   Location: {customer_info.get('City')}, {customer_info.get('State')}\n"
-                        except Exception as e:
-                            logger.warning(f"Could not extract customer details: {e}")
-                    
                     return message
                     
                 except Exception as e:
@@ -506,6 +498,7 @@ class TelephonyAgent(Agent):
                     return f"Found policy information in AMS360 for policy number {policy_number}."
             else:
                 return f"No policy found in AMS360 with policy number {policy_number}."
+        
         except Exception as e:
             logger.error(f"Error getting AMS360 policy by number: {e}")
             return f"Error retrieving policy: {str(e)}"
@@ -891,10 +884,26 @@ AVAILABLE TOOLS - Use these during the conversation:
    - create_agencyzoom_lead: Create a new lead in AgencyZoom with customer details
    - submit_collected_data_to_agencyzoom: Submit ALL collected insurance data to AgencyZoom as a comprehensive lead
 
-WORKFLOW:
+WORKFLOW FOR EXISTING POLICY LOOKUP:
+1. Ask customer: "May I have your full name please?"
+2. Ask customer: "What is your policy number?"
+3. REPEAT THE POLICY NUMBER BACK: Say "Let me confirm, your policy number is [policy_number], is that correct?"
+   - If customer says NO, ask for the correct policy number
+   - If customer says YES, proceed to step 4
+4. BEFORE calling the tool, say: "Give me a moment while I pull up your policy information."
+5. Call get_ams360_policy_by_number(policy_number) - ONLY CALL THIS ONCE
+6. When you receive the policy details:
+   a. Compare the customer-provided name with the policy holder name from the response
+   b. If names MATCH: Say "Thank you for verifying. Let me share your policy details with you" and provide the policy information
+   c. If names DON'T MATCH: Say "The name doesn't match our records. Could you please spell the registered name on the policy letter by letter for me? For example, J-O-H-N space S-M-I-T-H" 
+      - DO NOT call get_ams360_policy_by_number again
+      - Once customer provides the correct name (spelled out) and it matches, share the policy details
+7. After sharing policy details, ask "Is there anything else I can help you with today?"
+
+WORKFLOW FOR NEW INSURANCE QUOTE:
 1. Greet the caller and identify their insurance needs
-2. For existing customers, use AMS360 tools to look up their policies
-3. For new leads, call set_user_action with the appropriate action and insurance type
+2. Ask if they want to ADD new insurance or UPDATE existing policy
+3. Call set_user_action with the appropriate action and insurance type
 4. Use the relevant collect_*_insurance_data tool to gather information
 5. BEFORE calling submit_quote_request, say: "Let me submit your request for you. This will just take a moment."
 6. Call submit_quote_request to process the quote
@@ -902,9 +911,10 @@ WORKFLOW:
 8. Confirm to the user that their information has been submitted
 9. If caller requests human assistance, use transfer_to_human
 
-CRITICAL: You MUST call BOTH submit_quote_request AND submit_collected_data_to_agencyzoom for every quote. The quote is only saved locally until you call submit_collected_data_to_agencyzoom to send it to AgencyZoom.
-
-IMPORTANT: Always inform the user before submitting their information. Say something like "Give me a second while I submit your request" or "Let me process that for you right away" before calling submission tools."""
+CRITICAL RULES:
+- For policy lookup: ONLY call get_ams360_policy_by_number ONCE per policy number. Store the response and verify name without calling again.
+- For new quotes: You MUST call BOTH submit_quote_request AND submit_collected_data_to_agencyzoom. The quote is only saved locally until you call submit_collected_data_to_agencyzoom to send it to AgencyZoom.
+- Always inform the user before submitting their information. Say something like "Give me a second while I submit your request" or "Let me process that for you right away" before calling submission tools."""
     
     # Initialize the insurance receptionist agent with function tools
     agent = TelephonyAgent(

@@ -862,19 +862,20 @@ AVAILABLE TOOLS - Use these during the conversation:
    - create_agencyzoom_lead: Create a new lead in AgencyZoom with customer details
    - submit_collected_data_to_agencyzoom: Submit ALL collected insurance data to AgencyZoom as a comprehensive lead
 
-WORKFLOW:
+WORKFLOW FOR NEW INSURANCE QUOTE:
 1. Greet the caller and identify their insurance needs
-2. Call set_user_action with the appropriate action and insurance type
-3. Use the relevant collect_*_insurance_data tool to gather information
-4. BEFORE calling submit_quote_request, say: "Let me submit your request for you. This will just take a moment."
-5. Call submit_quote_request to process the quote
-6. IMMEDIATELY AFTER submit_quote_request succeeds, ALWAYS call submit_collected_data_to_agencyzoom to save the lead to AgencyZoom CRM
-7. Confirm to the user that their information has been submitted
-8. If caller requests human assistance or meets escalation condition, use transfer_to_human
+2. Ask if they want to ADD new insurance or UPDATE existing policy
+3. Call set_user_action with the appropriate action and insurance type
+4. Use the relevant collect_*_insurance_data tool to gather information
+5. BEFORE calling submit_quote_request, say: "Let me submit your request for you. This will just take a moment."
+6. Call submit_quote_request to process the quote
+7. IMMEDIATELY AFTER submit_quote_request succeeds, ALWAYS call submit_collected_data_to_agencyzoom to save the lead to AgencyZoom CRM
+8. Confirm to the user that their information has been submitted
+9. If caller requests human assistance or meets escalation condition, use transfer_to_human
 
-CRITICAL: You MUST call BOTH submit_quote_request AND submit_collected_data_to_agencyzoom for every quote. The quote is only saved locally until you call submit_collected_data_to_agencyzoom to send it to AgencyZoom.
-
-IMPORTANT: Always inform the user before submitting their information. Say something like "Give me a second while I submit your request" or "Let me process that for you right away" before calling submission tools."""
+CRITICAL RULES:
+- You MUST call BOTH submit_quote_request AND submit_collected_data_to_agencyzoom for every quote. The quote is only saved locally until you call submit_collected_data_to_agencyzoom to send it to AgencyZoom.
+- Always inform the user before submitting their information. Say something like "Give me a second while I submit your request" or "Let me process that for you right away" before calling submission tools."""
         
         # Add escalation condition if provided
         if escalation_condition:
