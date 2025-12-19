@@ -86,22 +86,6 @@ logger.info(f"LIVEKIT_API_SECRET: {LIVEKIT_API_SECRET}")
 logger.info(f"OPENAI_API_KEY: {'SET' if os.getenv('OPENAI_API_KEY') else 'NOT SET'}")
 logger.info(f"STT_MODEL: {STT_MODEL}")
 logger.info(f"LLM_MODEL: {LLM_MODEL}")
-logger.info(f"INSHORA_KNOWLEDGE_BASE: Loaded ({len(INSHORA_KNOWLEDGE_BASE)} characters)")
-logger.info("-" * 60)
-logger.info("Available Agent Tools:")
-logger.info("  - transfer_to_human: Transfer SIP caller to human agent")
-logger.info("  - end_call: End call gracefully")
-logger.info("  - set_user_action: Set action type (add/update) and insurance type")
-logger.info("  - collect_home_insurance_data: Collect home insurance information")
-logger.info("  - collect_auto_insurance_data: Collect auto insurance information")
-logger.info("  - collect_flood_insurance_data: Collect flood insurance information")
-logger.info("  - collect_life_insurance_data: Collect life insurance information")
-logger.info("  - collect_commercial_insurance_data: Collect commercial insurance information")
-logger.info("  - submit_quote_request: Submit collected insurance quote request")
-logger.info("  - create_agencyzoom_lead: Create new lead in AgencyZoom")
-logger.info("  - submit_collected_data_to_agencyzoom: Submit all collected data to AgencyZoom")
-logger.info(f"Total Tools: 11")
-logger.info("=" * 60)
 
 
 # ------------------------------------------------------------
@@ -153,23 +137,14 @@ class Assistant(Agent):
     def __init__(
         self, 
         instructions: str = None,
-        insurance_service: InsuranceService = None,
-        agencyzoom_service: AgencyZoomService = None
+       
     ) -> None:
         if instructions is None:
             instructions = os.getenv("AGENT_INSTRUCTIONS", "You are a helpful voice AI assistant.")
         logger.info(f"Agent initialized with instructions: {instructions[:200]}...")
         super().__init__(instructions=instructions)
         
-        # Initialize services (create new ones if not provided)
-        self.agencyzoom_service = agencyzoom_service or AgencyZoomService()
-        self.insurance_service = insurance_service or InsuranceService(agencyzoom_service=self.agencyzoom_service)
         
-        # Initialize tool sets
-        self.base_tools = BaseTools()
-        self.insurance_tools = InsuranceTools(self.insurance_service)
-        
-        logger.info("Assistant initialized with insurance and AgencyZoom services")
 
     @function_tool
     async def transfer_to_human(self, ctx: RunContext) -> str:
@@ -242,566 +217,6 @@ class Assistant(Agent):
             logger_local.error(f"Failed to end call: {e}", exc_info=True)
             return "error"
 
-    # Expose insurance tools as agent methods for function calling
-    @function_tool()
-    async def set_user_action(self, action_type: str, insurance_type: str) -> str:
-        """Set the user action type (add/update) and insurance type.
-        
-        Args:
-            action_type: Either "add" for new insurance or "update" for existing policy
-            insurance_type: Type of insurance - "home", "auto", "flood", "life", or "commercial"
-        """
-        logger.info(f"🔧 Agent tool called: set_user_action({action_type}, {insurance_type})")
-        return self.insurance_service.set_user_action(action_type, insurance_type)
-    
-    @function_tool()
-    async def collect_home_insurance_data(
-        self,
-        first_name: str,
-        last_name: str,
-        date_of_birth: str,
-        phone: str,
-        street_address: str,
-        city: str,
-        state: str,
-        country: str,
-        zip_code: str,
-        email: str,
-        current_provider: str = None,
-        spouse_first_name: str = None,
-        spouse_last_name: str = None,
-        spouse_dob: str = None,
-        has_solar_panels: bool = False,
-        has_pool: bool = False,
-        roof_age: int = 0,
-        has_pets: bool = False,
-        renewal_date: str = None,
-        renewal_premium: float = None
-    ) -> str:
-        """Collect home insurance information from the caller.
-        Args:
-            first_name: First name of primary insured
-            last_name: Last name of primary insured
-            date_of_birth: Date of birth (YYYY-MM-DD format)
-            phone: Phone number
-            street_address: Street address
-            city: City
-            state: State
-            country: Country
-            zip_code: ZIP or postal code
-            email: Email address
-            current_provider: Current insurance provider (optional)
-            spouse_first_name: Spouse first name (optional)
-            spouse_last_name: Spouse last name (optional)
-            spouse_dob: Spouse date of birth (optional, YYYY-MM-DD format)
-            has_solar_panels: Whether property has solar panels
-            has_pool: Whether property has a pool
-            roof_age: Age of roof in years
-            has_pets: Whether household has pets
-            renewal_date: Current policy renewal date (optional, YYYY-MM-DD format)
-            renewal_premium: Current renewal premium amount (optional)
-        """
-        logger.info(f"🔧 Agent tool called: collect_home_insurance_data({first_name} {last_name})")
-        # Combine first and last name for internal storage
-        full_name = f"{first_name} {last_name}".strip()
-        spouse_name = f"{spouse_first_name} {spouse_last_name}".strip() if spouse_first_name and spouse_last_name else None
-        return self.insurance_service.collect_home_insurance(
-            full_name=full_name,
-            date_of_birth=date_of_birth,
-            phone=phone,
-            street_address=street_address,
-            city=city,
-            state=state,
-            country=country,
-            zip_code=zip_code,
-            email=email,
-            current_provider=current_provider,
-            spouse_name=spouse_name,
-            spouse_dob=spouse_dob,
-            has_solar_panels=has_solar_panels,
-            has_pool=has_pool,
-            roof_age=roof_age,
-            has_pets=has_pets,
-            renewal_date=renewal_date,
-            renewal_premium=renewal_premium
-        )
-    
-    @function_tool()
-    async def collect_auto_insurance_data(
-        self,
-        driver_first_name: str,
-        driver_last_name: str,
-        driver_dob: str,
-        phone: str,
-        license_number: str,
-        vin: str,
-        vehicle_make: str,
-        vehicle_model: str,
-        coverage_type: str = "full",
-        email: str = "",
-        qualification: str = "Unknown",
-        profession: str = "Unknown",
-        gpa: float = None,
-        current_provider: str = None,
-        renewal_date: str = None,
-        renewal_premium: float = None
-    ) -> str:
-        """Collect auto insurance information from the caller.
-        Args:
-            driver_first_name: Driver's first name
-            driver_last_name: Driver's last name
-            driver_dob: Driver date of birth (YYYY-MM-DD format)
-            phone: Phone number
-            license_number: Driver's license number
-            vin: Vehicle VIN (17 characters)
-            vehicle_make: Vehicle make
-            vehicle_model: Vehicle model
-            coverage_type: Coverage type - "liability" or "full"
-            email: Email address (optional)
-            qualification: Driver qualification (optional)
-            profession: Driver profession (optional)
-            gpa: GPA if driver under 21 (optional)
-            current_provider: Current insurance provider (optional)
-            renewal_date: Current policy renewal date (optional, YYYY-MM-DD format)
-            renewal_premium: Current renewal premium amount (optional)
-        """
-        logger.info(f"🔧 Agent tool called: collect_auto_insurance_data({driver_first_name} {driver_last_name})")
-        # Combine first and last name for internal storage
-        driver_name = f"{driver_first_name} {driver_last_name}".strip()
-        return self.insurance_service.collect_auto_insurance(
-            driver_name=driver_name,
-            driver_dob=driver_dob,
-            phone=phone,
-            license_number=license_number,
-            vin=vin,
-            vehicle_make=vehicle_make,
-            vehicle_model=vehicle_model,
-            coverage_type=coverage_type,
-            email=email,
-            qualification=qualification,
-            profession=profession,
-            gpa=gpa,
-            current_provider=current_provider,
-            renewal_date=renewal_date,
-            renewal_premium=renewal_premium
-        )
-    
-    @function_tool()
-    async def collect_flood_insurance_data(
-        self, 
-        first_name: str,
-        last_name: str,
-        email: str,
-        phone: str,
-        street_address: str,
-        city: str,
-        state: str,
-        country: str,
-        zip_code: str
-    ) -> str:
-        """Collect flood insurance information from the caller.
-        Args:
-            first_name: First name of insured
-            last_name: Last name of insured
-            email: Email address
-            phone: Phone number
-            street_address: Street address
-            city: City
-            state: State
-            country: Country
-            zip_code: ZIP or postal code
-        """
-        logger.info(f"🔧 Agent tool called: collect_flood_insurance_data({first_name} {last_name})")
-        # Combine first and last name for internal storage
-        full_name = f"{first_name} {last_name}".strip()
-        return self.insurance_service.collect_flood_insurance(
-            full_name=full_name,
-            email=email,
-            phone=phone,
-            street_address=street_address,
-            city=city,
-            state=state,
-            country=country,
-            zip_code=zip_code
-        )
-    
-    @function_tool()
-    async def collect_life_insurance_data(
-        self,
-        first_name: str,
-        last_name: str,
-        date_of_birth: str,
-        phone: str,
-        street_address: str,
-        city: str,
-        state: str,
-        country: str,
-        zip_code: str,
-        email: str = "",
-        appointment_requested: bool = False,
-        appointment_date: str = None,
-        policy_type: str = None
-    ) -> str:
-        """Collect life insurance information from the caller.
-        Args:
-            first_name: First name of insured
-            last_name: Last name of insured
-            date_of_birth: Date of birth (YYYY-MM-DD format)
-            phone: Phone number
-            street_address: Street address
-            city: City
-            state: State
-            country: Country
-            zip_code: ZIP or postal code
-            email: Email address (optional)
-            appointment_requested: Whether customer wants an appointment
-            appointment_date: Requested appointment date and time (optional, YYYY-MM-DD HH:MM format)
-            policy_type: Type of policy - "term", "whole", "universal", "annuity", or "long_term_care" (optional)
-        """
-        logger.info(f"🔧 Agent tool called: collect_life_insurance_data({first_name} {last_name})")
-        # Combine first and last name for internal storage
-        full_name = f"{first_name} {last_name}".strip()
-        return self.insurance_service.collect_life_insurance(
-            full_name=full_name,
-            date_of_birth=date_of_birth,
-            phone=phone,
-            street_address=street_address,
-            city=city,
-            state=state,
-            country=country,
-            zip_code=zip_code,
-            email=email,
-            appointment_requested=appointment_requested,
-            appointment_date=appointment_date,
-            policy_type=policy_type
-        )
-    
-    @function_tool()
-    async def collect_commercial_insurance_data(
-        self,
-        business_name: str,
-        phone: str,
-        street_address: str,
-        city: str,
-        state: str,
-        country: str,
-        zip_code: str,
-        business_type: str = "General",
-        email: str = "",
-        inventory_limit: float = None,
-        building_coverage: bool = False,
-        building_coverage_limit: float = None,
-        current_provider: str = None,
-        renewal_date: str = None,
-        renewal_premium: float = None
-    ) -> str:
-        """Collect commercial insurance information from the caller.
-        Args:
-            business_name: Name of the business
-            phone: Phone number
-            street_address: Street address
-            city: City
-            state: State
-            country: Country
-            zip_code: ZIP or postal code
-            business_type: Type of business
-            email: Email address (optional)
-            inventory_limit: Inventory coverage limit (optional)
-            building_coverage: Whether building coverage is needed
-            building_coverage_limit: Building coverage limit (optional)
-            current_provider: Current insurance provider (optional)
-            renewal_date: Current policy renewal date (optional, YYYY-MM-DD format)
-            renewal_premium: Current renewal premium amount (optional)
-        """
-        logger.info(f"🔧 Agent tool called: collect_commercial_insurance_data({business_name})")
-        return self.insurance_service.collect_commercial_insurance(
-            business_name=business_name,
-            phone=phone,
-            street_address=street_address,
-            city=city,
-            state=state,
-            country=country,
-            zip_code=zip_code,
-            business_type=business_type,
-            email=email,
-            inventory_limit=inventory_limit,
-            building_coverage=building_coverage,
-            building_coverage_limit=building_coverage_limit,
-            current_provider=current_provider,
-            renewal_date=renewal_date,
-            renewal_premium=renewal_premium
-        )
-    
-    @function_tool()
-    async def submit_quote_request(self) -> str:
-        """Submit the collected insurance quote request."""
-        logger.info("🔧 Agent tool called: submit_quote_request()")
-        return self.insurance_service.submit_quote_request()
-    
-    
-    # AgencyZoom Integration Tools
-    @function_tool()
-    async def create_agencyzoom_lead(
-        self, 
-        first_name: str, 
-        last_name: str, 
-        email: str, 
-        phone: str, 
-        insurance_type: str,
-        streetAddress: str = "",
-        city: str = "",
-        state: str = "",
-        country: str = "",
-        zip_code: str = "",
-        notes: str = "",
-        birthday: str = "",
-        current_provider: str = "",
-        vehicle_info: str = "",
-        property_info: str = "",
-        business_name: str = "",
-        appointment_requested: bool = False
-    ) -> str:
-        """Create a new lead in AgencyZoom with detailed information.
-        
-        Args:
-            first_name: Lead's first name
-            last_name: Lead's last name
-            email: Lead's email address
-            phone: Lead's phone number
-            insurance_type: Type of insurance interested in (home, auto, flood, life, commercial)
-            streetAddress: Street address (optional)
-            city: City (optional)
-            state: State (optional)
-            country: Country (optional)
-            zip_code: ZIP or postal code (optional)
-            notes: Additional notes about the lead (optional)
-            birthday: Date of birth for life/personal insurance (optional)
-            current_provider: Current insurance provider name (optional)
-            vehicle_info: Vehicle details for auto insurance (optional)
-            property_info: Property details for home insurance (optional)
-            business_name: Business name for commercial insurance (optional)
-            appointment_requested: Whether customer wants an appointment (optional)
-        
-        Returns:
-            String message confirming lead creation or error
-        """
-        logger.info(f"🔧 Agent tool called: create_agencyzoom_lead({first_name} {last_name}, {insurance_type})")
-        
-        lead_data = {
-            "first_name": first_name,
-            "last_name": last_name,
-            "email": email,
-            "phone": phone,
-            "insurance_type": insurance_type,
-            "notes": notes,
-            "source": "AI Phone Call"
-        }
-        
-        # Build full address if components provided
-        address_parts = [streetAddress, city, state, zip_code, country]
-        full_address = ", ".join([part for part in address_parts if part])
-        if full_address:
-            lead_data["address"] = full_address
-        
-        # Add optional fields if provided
-        if birthday:
-            lead_data["date_of_birth"] = birthday
-        if current_provider:
-            lead_data["current_provider"] = current_provider
-        if vehicle_info:
-            lead_data["vehicle_info"] = vehicle_info
-        if property_info:
-            lead_data["property_info"] = property_info
-        if business_name:
-            lead_data["business_name"] = business_name
-        if appointment_requested:
-            lead_data["appointment_requested"] = appointment_requested
-        
-        try:
-            result = self.agencyzoom_service.create_lead(lead_data)
-            if result:
-                detail_msg = f"Successfully created lead in AgencyZoom for {first_name} {last_name}. "
-                detail_msg += f"They are interested in {insurance_type} insurance."
-                if current_provider:
-                    detail_msg += f" Current provider: {current_provider}."
-                if appointment_requested:
-                    detail_msg += " Appointment requested."
-                return detail_msg
-            else:
-                return "Failed to create lead in AgencyZoom. Please check the logs for details."
-        except Exception as e:
-            logger.error(f"Error creating AgencyZoom lead: {e}")
-            return f"Error creating lead: {str(e)}"
-    
-    
-    
-    
-    
-    @function_tool()
-    async def submit_collected_data_to_agencyzoom(self) -> str:
-        """Submit all collected insurance data to AgencyZoom as a comprehensive lead.
-        This automatically extracts all the detailed information collected during the call
-        and creates a lead with complete insurance-specific fields.
-        
-        Returns:
-            String message confirming submission or error
-        """
-        logger.info("🔧 Agent tool called: submit_collected_data_to_agencyzoom()")
-        
-        # Check if we have insurance data collected
-        if not self.insurance_service.insurance_type:
-            return "No insurance data has been collected yet. Please collect insurance information first."
-        
-        insurance_type = self.insurance_service.insurance_type
-        insurance_key = f"{insurance_type}_insurance"
-        
-        if insurance_key not in self.insurance_service.collected_data:
-            return f"No {insurance_type} insurance data found. Please collect the information first."
-        
-        try:
-            insurance_data = self.insurance_service.collected_data[insurance_key]
-            
-            # Extract name and contact info based on insurance type
-            first_name = ""
-            last_name = ""
-            email = ""
-            phone = ""
-            
-            # Extract data based on insurance type
-            if insurance_type == "home":
-                full_name = insurance_data.get("primary_insured", {}).get("full_name", "")
-                if full_name:
-                    name_parts = full_name.split(" ", 1)
-                    first_name = name_parts[0]
-                    last_name = name_parts[1] if len(name_parts) > 1 else ""
-                contact_info = insurance_data.get("contact", {})
-                email = contact_info.get("email", "")
-                phone = contact_info.get("phone", "")
-                
-            elif insurance_type == "auto":
-                drivers = insurance_data.get("drivers", [])
-                if drivers:
-                    full_name = drivers[0].get("full_name", "")
-                    if full_name:
-                        name_parts = full_name.split(" ", 1)
-                        first_name = name_parts[0]
-                        last_name = name_parts[1] if len(name_parts) > 1 else ""
-                contact_info = insurance_data.get("contact", {})
-                email = contact_info.get("email", "")
-                phone = contact_info.get("phone", "")
-                
-            elif insurance_type == "flood":
-                full_name = insurance_data.get("full_name", "")
-                if full_name:
-                    name_parts = full_name.split(" ", 1)
-                    first_name = name_parts[0]
-                    last_name = name_parts[1] if len(name_parts) > 1 else ""
-                email = insurance_data.get("email", "")
-                phone = insurance_data.get("phone", "")
-                
-            elif insurance_type == "life":
-                full_name = insurance_data.get("insured", {}).get("full_name", "")
-                if full_name:
-                    name_parts = full_name.split(" ", 1)
-                    first_name = name_parts[0]
-                    last_name = name_parts[1] if len(name_parts) > 1 else ""
-                contact_info = insurance_data.get("contact", {})
-                email = contact_info.get("email", "")
-                phone = contact_info.get("phone", "")
-                
-            elif insurance_type == "commercial":
-                business_name = insurance_data.get("business", {}).get("name", "")
-                first_name = business_name  # For commercial, use business name
-                last_name = ""
-                contact_info = insurance_data.get("contact", {})
-                email = contact_info.get("email", "")
-                phone = contact_info.get("phone", "")
-            
-            # Create comprehensive lead data
-            lead_data = {
-                "first_name": first_name or "Unknown",
-                "last_name": last_name or "",
-                "email": email or "noemail@pending.com",
-                "phone": phone or "",
-                "insurance_type": insurance_type,
-                "source": "AI Voice Agent",
-                "notes": f"Lead collected via AI voice agent. Session ID: {self.insurance_service.session_id}",
-                "insurance_details": insurance_data  # Include ALL detailed insurance data
-            }
-            
-            # Add insurance-type specific fields to top level for easy access
-            if insurance_type == "home":
-                property_addr = insurance_data.get("property", {}).get("address", {})
-                lead_data["streetAddress"] = property_addr.get('streetAddress', '')
-                lead_data["city"] = property_addr.get('city', '')
-                lead_data["state"] = property_addr.get('state', '')
-                lead_data["country"] = property_addr.get('country', '')
-                lead_data["zip"] = property_addr.get('zip_code', '')
-                lead_data["has_pool"] = insurance_data.get("property", {}).get("has_pool", False)
-                lead_data["has_solar_panels"] = insurance_data.get("property", {}).get("has_solar_panels", False)
-                lead_data["roof_age"] = insurance_data.get("property", {}).get("roof_age", 0)
-                lead_data["has_pets"] = insurance_data.get("has_pets", False)
-                lead_data["current_provider"] = insurance_data.get("current_policy", {}).get("current_provider", "")
-                
-            elif insurance_type == "auto":
-                vehicles = insurance_data.get("vehicles", [])
-                if vehicles:
-                    lead_data["vehicle_vin"] = vehicles[0].get("vin", "")
-                    lead_data["vehicle_make"] = vehicles[0].get("make", "")
-                    lead_data["vehicle_model"] = vehicles[0].get("model", "")
-                    lead_data["coverage_type"] = vehicles[0].get("coverage_type", "")
-                drivers = insurance_data.get("drivers", [])
-                if drivers:
-                    lead_data["license_number"] = drivers[0].get("license_number", "")
-                    lead_data["profession"] = drivers[0].get("profession", "")
-                lead_data["current_provider"] = insurance_data.get("current_policy", {}).get("current_provider", "")
-                
-            elif insurance_type == "flood":
-                home_addr = insurance_data.get("home_address", {})
-                lead_data["streetAddress"] = home_addr.get('streetAddress', '')
-                lead_data["city"] = home_addr.get('city', '')
-                lead_data["state"] = home_addr.get('state', '')
-                lead_data["country"] = home_addr.get('country', '')
-                lead_data["zip"] = home_addr.get('zip_code', '')
-                
-            elif insurance_type == "life":
-                life_addr = insurance_data.get("address", {})
-                lead_data["streetAddress"] = life_addr.get('streetAddress', '')
-                lead_data["city"] = life_addr.get('city', '')
-                lead_data["state"] = life_addr.get('state', '')
-                lead_data["country"] = life_addr.get('country', '')
-                lead_data["zip"] = life_addr.get('zip_code', '')
-                lead_data["appointment_requested"] = insurance_data.get("appointment_requested", False)
-                lead_data["appointment_date"] = insurance_data.get("appointment_date", "")
-                lead_data["policy_type"] = insurance_data.get("policy_type", "")
-                lead_data["date_of_birth"] = insurance_data.get("insured", {}).get("date_of_birth", "")
-                
-            elif insurance_type == "commercial":
-                lead_data["business_name"] = insurance_data.get("business", {}).get("name", "")
-                lead_data["business_type"] = insurance_data.get("business", {}).get("type", "")
-                business_addr = insurance_data.get("business", {}).get("address", {})
-                lead_data["streetAddress"] = business_addr.get('streetAddress', '')
-                lead_data["city"] = business_addr.get('city', '')
-                lead_data["state"] = business_addr.get('state', '')
-                lead_data["country"] = business_addr.get('country', '')
-                lead_data["zip"] = business_addr.get('zip_code', '')
-                lead_data["inventory_limit"] = insurance_data.get("coverage", {}).get("inventory_limit", "")
-                lead_data["building_coverage"] = insurance_data.get("coverage", {}).get("building_coverage", False)
-                lead_data["current_provider"] = insurance_data.get("current_policy", {}).get("current_provider", "")
-            
-            # Submit to AgencyZoom
-            result = self.agencyzoom_service.create_lead(lead_data)
-            
-            if result:
-                logger.info(f"Successfully submitted comprehensive {insurance_type} insurance data to AgencyZoom")
-                return f"Excellent! I've successfully submitted all your {insurance_type} insurance information to AgencyZoom with complete details including all the specific information you provided. Our team will follow up with you shortly!"
-            else:
-                return "Failed to submit data to AgencyZoom. The information is saved locally and can be submitted manually."
-                
-        except Exception as e:
-            logger.error(f"Error submitting collected data to AgencyZoom: {e}", exc_info=True)
-            return f"Error submitting to AgencyZoom: {str(e)}. The data is still saved locally."
-
     
 # ------------------------------------------------------------
 # Agent entrypoint
@@ -816,7 +231,15 @@ async def entrypoint(ctx: agents.JobContext):
     try:
         logger.info("Loading dynamic configuration from config.json...")
         
+        # Load and store in global cache
+        global _DYNAMIC_CONFIG_CACHE, _CACHE_TIMESTAMP
+        import time
+        
         dynamic_config = load_dynamic_config()
+        _DYNAMIC_CONFIG_CACHE = dynamic_config
+        _CACHE_TIMESTAMP = time.time()
+        logger.info("✓ Dynamic config loaded and cached globally")
+        
         caller_name = dynamic_config.get("caller_name", "Guest")
         dynamic_instruction = dynamic_config.get("agent_instructions", "You are a helpful voice AI assistant.")
         language = dynamic_config.get("tts_language", "en")
@@ -829,57 +252,10 @@ async def entrypoint(ctx: agents.JobContext):
         # Start with the dynamic instruction
         base_instructions = dynamic_instruction
         
-        # Add the Inshora Knowledge Base and tool instructions
-        instructions = f"""{base_instructions}
-
-{INSHORA_KNOWLEDGE_BASE}
-
-USE THIS KNOWLEDGE BASE TO:
-- Answer questions about Texas insurance requirements accurately
-- Handle objections professionally using the provided scripts
-- Adapt your tone based on the caller's communication style
-- Mention relevant promotions and discounts when appropriate
-- Cross-sell based on the lead scoring matrix
-- Know when to escalate to a human agent
-- Use rebuttals when needed to keep the conversation productive
-
-AVAILABLE TOOLS - Use these during the conversation:
-
-1. CALL MANAGEMENT:
-   - transfer_to_human: Transfer the caller to a human agent when escalation is needed
-   - end_call: End the call gracefully when conversation is complete
-
-2. INSURANCE DATA COLLECTION:
-   - set_user_action: FIRST call this to set action type ("add" or "update") and insurance type ("home", "auto", "flood", "life", "commercial")
-   - collect_home_insurance_data: Collect home insurance details (first_name, last_name, birthday, phone, street_address, city, state, country, zip_code, email, current provider)
-   - collect_auto_insurance_data: Collect auto insurance details (driver_first_name, driver_last_name, birthday, phone, license, VIN, vehicle make/model, coverage type)
-   - collect_flood_insurance_data: Collect flood insurance details (first_name, last_name, email, phone, street_address, city, state, country, zip_code)
-   - collect_life_insurance_data: Collect life insurance details (first_name, last_name, birthday, phone, street_address, city, state, country, zip_code)
-   - collect_commercial_insurance_data: Collect commercial insurance details (business name, phone, street_address, city, state, country, zip_code, inventory limit, building coverage)
-   - submit_quote_request: Submit the collected insurance data for quote processing
-
-3. CRM INTEGRATION:
-   - create_agencyzoom_lead: Create a new lead in AgencyZoom with customer details
-   - submit_collected_data_to_agencyzoom: Submit ALL collected insurance data to AgencyZoom as a comprehensive lead
-
-WORKFLOW FOR NEW INSURANCE QUOTE:
-1. Greet the caller and identify their insurance needs
-2. Ask if they want to ADD new insurance or UPDATE existing policy
-3. Call set_user_action with the appropriate action and insurance type
-4. Use the relevant collect_*_insurance_data tool to gather information
-5. BEFORE calling submit_quote_request, say: "Let me submit your request for you. This will just take a moment."
-6. Call submit_quote_request to process the quote
-7. IMMEDIATELY AFTER submit_quote_request succeeds, ALWAYS call submit_collected_data_to_agencyzoom to save the lead to AgencyZoom CRM
-8. Confirm to the user that their information has been submitted
-9. If caller requests human assistance or meets escalation condition, use transfer_to_human
-
-CRITICAL RULES:
-- You MUST call BOTH submit_quote_request AND submit_collected_data_to_agencyzoom for every quote. The quote is only saved locally until you call submit_collected_data_to_agencyzoom to send it to AgencyZoom.
-- Always inform the user before submitting their information. Say something like "Give me a second while I submit your request" or "Let me process that for you right away" before calling submission tools."""
         
         # Add escalation condition if provided
         if escalation_condition:
-            instructions = f"{instructions}\n\nESCALATION CONDITION: {escalation_condition}"
+            instructions = f"{base_instructions}\n\nESCALATION CONDITION strictly follow this condition and transfer the call to the human agent: {escalation_condition}"
         
         
         logger.info("Dynamic configuration loaded successfully")
@@ -903,48 +279,7 @@ CRITICAL RULES:
         logger.warning(f"Failed to load dynamic config, using defaults: {str(e)}")
         caller_name = "Guest"
         # Include knowledge base in fallback instructions
-        instructions = f"""You are a professional AI insurance assistant for Inshora Group.
-
-{INSHORA_KNOWLEDGE_BASE}
-
-USE THIS KNOWLEDGE BASE TO:
-- Answer questions about Texas insurance requirements accurately
-- Handle objections professionally using the provided scripts
-- Adapt your tone based on the caller's communication style
-- Mention relevant promotions and discounts when appropriate
-- Cross-sell based on the lead scoring matrix
-- Know when to escalate to a human agent
-- Use rebuttals when needed to keep the conversation productive
-
-AVAILABLE TOOLS - Use these during the conversation:
-
-1. CALL MANAGEMENT:
-   - transfer_to_human: Transfer the caller to a human agent when escalation is needed
-   - end_call: End the call gracefully when conversation is complete
-
-2. INSURANCE DATA COLLECTION:
-   - set_user_action: FIRST call this to set action type ("add" or "update") and insurance type ("home", "auto", "flood", "life", "commercial")
-   - collect_home_insurance_data: Collect home insurance details (first_name, last_name, birthday, phone, street_address, city, state, country, zip_code, email, current provider)
-   - collect_auto_insurance_data: Collect auto insurance details (driver_first_name, driver_last_name, birthday, phone, license, VIN, vehicle make/model, coverage type)
-   - collect_flood_insurance_data: Collect flood insurance details (first_name, last_name, email, phone, street_address, city, state, country, zip_code)
-   - collect_life_insurance_data: Collect life insurance details (first_name, last_name, birthday, phone, street_address, city, state, country, zip_code)
-   - collect_commercial_insurance_data: Collect commercial insurance details (business name, phone, street_address, city, state, country, zip_code, inventory limit, building coverage)
-   - submit_quote_request: Submit the collected insurance data for quote processing
-
-3. CRM INTEGRATION:
-   - create_agencyzoom_lead: Create a new lead in AgencyZoom with customer details
-   - submit_collected_data_to_agencyzoom: Submit ALL collected insurance data to AgencyZoom as a comprehensive lead
-
-WORKFLOW:
-1. Greet the caller and identify their insurance needs
-2. Call set_user_action with the appropriate action and insurance type
-3. Use the relevant collect_*_insurance_data tool to gather information
-4. BEFORE calling submit_quote_request or submit_collected_data_to_agencyzoom, say: "Let me submit your request for you. This will just take a moment."
-5. Call submit_quote_request to process the quote
-6. Call submit_collected_data_to_agencyzoom to save lead to CRM
-7. If caller requests human assistance, use transfer_to_human
-
-IMPORTANT: Always inform the user before submitting their information. Say something like "Give me a second while I submit your request" or "Let me process that for you right away" before calling any submission tools."""
+        instructions = f"""You are a professional AI insurance assistant for Inshora Group."""
         language = "en"
         voice_id = "21m00Tcm4TlvDq8ikWAM"
         provider = "openai"
@@ -980,9 +315,14 @@ IMPORTANT: Always inform the user before submitting their information. Say somet
                     
                     # Get caller information from dynamic config (use cached version)
                     logger.info("Saving transcript to MongoDB...")
-                    dynamic_config = load_dynamic_config()
-                    caller_name = dynamic_config.get("caller_name", "Guest")
-                    contact_number = dynamic_config.get("contact_number")
+                    
+                    # Use cached config instead of reloading
+                    global _DYNAMIC_CONFIG_CACHE
+                    if _DYNAMIC_CONFIG_CACHE is None:
+                        _DYNAMIC_CONFIG_CACHE = load_dynamic_config()
+                    
+                    caller_name = _DYNAMIC_CONFIG_CACHE.get("caller_name", "Guest")
+                    contact_number = _DYNAMIC_CONFIG_CACHE.get("contact_number")
                     
                     # Generate caller_id from room name
                     caller_id = ctx.room.name if ctx.room else f"call_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -1103,63 +443,6 @@ IMPORTANT: Always inform the user before submitting their information. Say somet
         # Add small delay to ensure previous call cleanup is complete
         logger.info("Waiting for any previous cleanup to complete...")
         await asyncio.sleep(0.5)
-
-        # logger.info("Step 1: Initializing STT (Deepgram)")
-        # stt_instance = deepgram.STT(model=STT_MODEL, language=STT_LANGUAGE)
-
-        # logger.info(f"Step 2: Initializing LLM ({provider})")
-        
-        # # Initialize LLM based on provider from config
-        # if provider == "gemini":
-        #     if api_key:
-        #         logger.info("Using Gemini with custom API key")
-        #         # Set the API key in environment for Google plugin
-        #         os.environ["GOOGLE_API_KEY"] = api_key
-        #         llm_instance = google.LLM(model="gemini-2.5-pro")
-        #         logger.info("[OK] Gemini LLM initialized with custom API key")
-        #     else:
-        #         logger.warning("Gemini provider selected but no API key provided, falling back to OpenAI")
-        #         llm_instance = openai.LLM(model=LLM_MODEL)
-        #         logger.info("[OK] OpenAI LLM initialized (fallback)")
-        # else:  # default to OpenAI
-        #     if api_key:
-        #         logger.info("Using OpenAI with custom API key")
-        #         # Set the API key in environment for OpenAI plugin
-        #         os.environ["OPENAI_API_KEY"] = api_key
-        #         llm_instance = openai.LLM(model="gpt-4.1-mini")
-        #         logger.info("[OK] OpenAI LLM initialized with custom API key")
-        #     else:
-        #         logger.info("Using default OpenAI configuration")
-        #         llm_instance = openai.LLM(model=LLM_MODEL)
-        #         logger.info("[OK] OpenAI LLM initialized with default config")
-
-        # logger.info("Step 3: Initializing TTS (ElevenLabs)")
-        # try:
-        #     tts_instance = elevenlabs.TTS(
-        #         base_url="https://api.eu.residency.elevenlabs.io/v1",
-        #         voice_id=voice_id,
-        #         language=language,
-        #         model="eleven_flash_v2_5"
-        #     )
-        # #     tts_instance = cartesia.TTS(
-        # #     model='sonic-3',
-        # #     voice='a0e99841-438c-4a64-b679-ae501e7d6091',
-        # #     language='en',
-        # #     speed=1.0,
-        # #     sample_rate=24000
-        # # )
-
-        #     logger.info("[OK] ElevenLabs TTS initialized successfully")
-        # except Exception as tts_error:
-        #     logger.warning(f"ElevenLabs TTS initialization failed: {tts_error}")
-        #     logger.info("Falling back to OpenAI TTS...")
-        #     # Fallback to OpenAI TTS
-        #     tts_instance = openai.TTS(
-        #         voice="alloy",
-        #         model="tts-1"
-        #     )
-        #     logger.info("[OK] OpenAI TTS initialized as fallback")
-
         logger.info("Step 1: Creating AgentSession with OpenAI Realtime model")
         session = AgentSession(
             # Voice Activity Detection
@@ -1167,14 +450,14 @@ IMPORTANT: Always inform the user before submitting their information. Say somet
             # Create the realtime model
             llm = openai.realtime.RealtimeModel(
                 api_key=os.getenv("OPENAI_API_KEY"),
-                voice="alloy",
-                model="gpt-4o-realtime-preview-2024-12-17",
-                temperature=0.8,
+                voice=voice_id,
+                model="gpt-realtime",
+                temperature=0.2,
                 turn_detection=TurnDetection(
                     type="server_vad",
-                    silence_duration_ms=800,  # Reduced for lower latency - more responsive
-                    prefix_padding_ms=300,     # Reduced for lower latency
-                    threshold=0.5,  # Lower threshold for more responsive detection
+                    threshold=0.6,  # Increased from 0.5 - less sensitive = fewer false triggers
+                    prefix_padding_ms=200,  # Reduced from 300 - faster detection
+                    silence_duration_ms=400,  # Slightly increased - prevents cutting off user
                 ),
                 max_session_duration=1800,
             )

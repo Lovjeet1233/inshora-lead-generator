@@ -19,7 +19,7 @@ from threading import Lock
 logger = logging.getLogger("update_config")
 
 # Path to config file (in project root)
-CONFIG_FILE = Path(__file__).parent.parent.parent.parent / "config.json"
+CONFIG_FILE = Path(__file__).parent.parent.parent / "config.json"
 
 # Thread lock for file write safety
 _write_lock = Lock()

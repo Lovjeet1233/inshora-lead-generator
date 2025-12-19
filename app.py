@@ -132,6 +132,9 @@ thread_services: Dict[str, Dict] = {}
 # Store detailed policy information per thread (for on-demand retrieval)
 thread_policy_details: Dict[str, Dict] = {}
 
+# Store escalation state per thread (for tracking handover status)
+thread_escalation_state: Dict[str, Dict] = {}
+
 
 # ===========================
 # CHATBOT MODELS
@@ -141,6 +144,9 @@ class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
     query: str
     thread_id: str
+    prompt: Optional[str] = None  # Custom system prompt (if None, uses default CHATBOT_SYSTEM_INSTRUCTIONS)
+    escalation_condition: Optional[str] = None  # Condition to trigger handover to human
+    reset_escalation: bool = False  # Set to True to reset escalation and continue with bot
 
 
 class ChatResponse(BaseModel):
@@ -148,6 +154,10 @@ class ChatResponse(BaseModel):
     response: str
     thread_id: str
     timestamp: str
+    requires_handover: bool = False  # True if escalation condition is met
+    handover_reason: Optional[str] = None  # Reason for handover
+    escalation_active: bool = False  # True if currently in escalated state
+    escalation_reset: bool = False  # True if escalation was just reset
 
 
 # ===========================
@@ -172,17 +182,38 @@ def get_or_create_thread_services(thread_id: str) -> Dict:
     return thread_services[thread_id]
 
 
-def get_or_create_thread(thread_id: str) -> List[Dict]:
-    """Get or create a conversation thread."""
+def get_or_create_thread(thread_id: str, custom_prompt: Optional[str] = None) -> List[Dict]:
+    """
+    Get or create a conversation thread.
+    
+    Args:
+        thread_id: Unique identifier for the conversation thread
+        custom_prompt: Optional custom system prompt. If None, uses default CHATBOT_SYSTEM_INSTRUCTIONS
+    
+    Returns:
+        List of conversation messages for the thread
+    """
+    # Determine which prompt to use
+    system_prompt = custom_prompt if custom_prompt is not None else CHATBOT_SYSTEM_INSTRUCTIONS
+    
     if thread_id not in conversation_threads:
-        # Initialize with system message (using chatbot-specific instructions with knowledge base)
+        # Initialize with system message
         conversation_threads[thread_id] = [
             {
                 "role": "system",
-                "content": CHATBOT_SYSTEM_INSTRUCTIONS
+                "content": system_prompt
             }
         ]
-        logger.info(f"Created new conversation thread with Inshora Knowledge Base: {thread_id}")
+        prompt_type = "custom prompt" if custom_prompt else "default Inshora Knowledge Base"
+        logger.info(f"Created new conversation thread with {prompt_type}: {thread_id}")
+    else:
+        # Thread exists - update system message if custom prompt is provided
+        if custom_prompt is not None:
+            conversation_threads[thread_id][0] = {
+                "role": "system",
+                "content": system_prompt
+            }
+            logger.info(f"Updated system prompt for existing thread: {thread_id}")
     
     return conversation_threads[thread_id]
 
@@ -732,19 +763,62 @@ def execute_function_call(function_name: str, arguments: Dict, thread_id: str) -
 @app.post("/chat", response_model=ChatResponse, tags=["Chatbot"])
 async def chat(request: ChatRequest):
     """
-    Chat endpoint with conversation memory.
+    Chat endpoint with conversation memory and optional escalation handling.
     
     Args:
-        request: ChatRequest containing query and thread_id
+        request: ChatRequest containing:
+            - query: User's message
+            - thread_id: Conversation thread identifier
+            - prompt: Optional custom system prompt (if None, uses default CHATBOT_SYSTEM_INSTRUCTIONS)
+            - escalation_condition: Optional condition to trigger handover to human
+                Example: "user asks to speak with a manager" or "user is frustrated"
+            - reset_escalation: Set to True to reset escalation state and continue with bot
+                Use this after human interaction is complete
     
     Returns:
-        ChatResponse with AI response, thread_id, and timestamp
+        ChatResponse with:
+            - response: AI's response message
+            - thread_id: Conversation thread identifier
+            - timestamp: Response timestamp
+            - requires_handover: True if escalation condition is met in this response
+            - handover_reason: Explanation why handover is needed
+            - escalation_active: True if thread is currently in escalated state
+            - escalation_reset: True if escalation was just reset in this request
     """
     try:
         logger.info(f"Received chat request - Thread: {request.thread_id}, Query: {request.query}")
         
-        # Get or create conversation thread
-        messages = get_or_create_thread(request.thread_id)
+        # Check if escalation reset is requested
+        escalation_reset = False
+        if request.reset_escalation:
+            if request.thread_id in thread_escalation_state:
+                del thread_escalation_state[request.thread_id]
+                logger.info(f"Escalation state reset for thread: {request.thread_id}")
+                escalation_reset = True
+        
+        # Check current escalation state
+        current_escalation_state = thread_escalation_state.get(request.thread_id, {})
+        escalation_active = current_escalation_state.get("active", False)
+        
+        # If escalation is active and not reset, inform that handover is required
+        if escalation_active and not request.reset_escalation:
+            logger.info(f"Thread {request.thread_id} is in escalated state - human handover required")
+            return ChatResponse(
+                response="This conversation has been escalated to a human agent. Please wait for a human representative to assist you. If you'd like to continue with the AI assistant, please indicate so.",
+                thread_id=request.thread_id,
+                timestamp=datetime.now().isoformat(),
+                requires_handover=True,
+                handover_reason=current_escalation_state.get("reason", "Previously escalated"),
+                escalation_active=True,
+                escalation_reset=False
+            )
+        
+        # Get or create conversation thread with custom prompt if provided
+        messages = get_or_create_thread(request.thread_id, custom_prompt=request.prompt)
+        
+        # Log if custom prompt is being used
+        if request.prompt:
+            logger.info(f"Using custom prompt for thread: {request.thread_id}")
         
         # Add user message to conversation history
         messages.append({
@@ -824,10 +898,65 @@ async def chat(request: ChatRequest):
         
         logger.info(f"Chat response generated - Thread: {request.thread_id}")
         
+        # Check escalation condition if provided
+        requires_handover = False
+        handover_reason = None
+        
+        if request.escalation_condition:
+            logger.info(f"Checking escalation condition: {request.escalation_condition}")
+            try:
+                # Use OpenAI to evaluate if the escalation condition is met
+                escalation_check = openai.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": f"""You are an escalation evaluator. Analyze the conversation and determine if the following escalation condition is met:
+
+Escalation Condition: {request.escalation_condition}
+
+Respond with ONLY a JSON object in this exact format:
+{{"requires_handover": true/false, "reason": "brief explanation"}}
+
+If the condition is met, set requires_handover to true and provide a reason.
+If not met, set requires_handover to false."""
+                        },
+                        {
+                            "role": "user",
+                            "content": f"Latest user message: {request.query}\n\nLatest assistant response: {assistant_message.content}"
+                        }
+                    ],
+                    temperature=0.3,
+                    response_format={"type": "json_object"}
+                )
+                
+                escalation_result = json.loads(escalation_check.choices[0].message.content)
+                requires_handover = escalation_result.get("requires_handover", False)
+                handover_reason = escalation_result.get("reason")
+                
+                if requires_handover:
+                    logger.info(f"Escalation triggered - Reason: {handover_reason}")
+                    # Store escalation state for this thread
+                    thread_escalation_state[request.thread_id] = {
+                        "active": True,
+                        "reason": handover_reason,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                else:
+                    logger.info("Escalation condition not met, continuing conversation")
+                    
+            except Exception as e:
+                logger.error(f"Error checking escalation condition: {e}", exc_info=True)
+                # Continue without escalation if check fails
+        
         return ChatResponse(
             response=assistant_message.content,
             thread_id=request.thread_id,
-            timestamp=datetime.now().isoformat()
+            timestamp=datetime.now().isoformat(),
+            requires_handover=requires_handover,
+            handover_reason=handover_reason,
+            escalation_active=thread_escalation_state.get(request.thread_id, {}).get("active", False),
+            escalation_reset=escalation_reset
         )
     
     except Exception as e:
@@ -1030,8 +1159,54 @@ async def delete_thread(thread_id: str):
     if thread_id in thread_services:
         del thread_services[thread_id]
     
+    if thread_id in thread_escalation_state:
+        del thread_escalation_state[thread_id]
+    
     logger.info(f"Deleted thread: {thread_id}")
     return {"message": f"Thread {thread_id} deleted successfully"}
+
+
+@app.get("/thread/{thread_id}/escalation", tags=["Chatbot"])
+async def get_escalation_status(thread_id: str):
+    """
+    Get the current escalation status for a conversation thread.
+    
+    Returns information about whether the conversation is escalated,
+    when it was escalated, and the reason for escalation.
+    """
+    escalation_state = thread_escalation_state.get(thread_id, {})
+    
+    return {
+        "thread_id": thread_id,
+        "escalation_active": escalation_state.get("active", False),
+        "escalation_reason": escalation_state.get("reason"),
+        "escalation_timestamp": escalation_state.get("timestamp"),
+        "can_reset": escalation_state.get("active", False)
+    }
+
+
+@app.post("/thread/{thread_id}/escalation/reset", tags=["Chatbot"])
+async def reset_escalation_status(thread_id: str):
+    """
+    Reset the escalation status for a conversation thread.
+    
+    Use this endpoint to allow the user to continue chatting with the bot
+    after human interaction is complete.
+    """
+    if thread_id in thread_escalation_state:
+        del thread_escalation_state[thread_id]
+        logger.info(f"Escalation state reset for thread: {thread_id}")
+        return {
+            "message": "Escalation status reset successfully",
+            "thread_id": thread_id,
+            "escalation_active": False
+        }
+    else:
+        return {
+            "message": "No active escalation found for this thread",
+            "thread_id": thread_id,
+            "escalation_active": False
+        }
 
 
 # ===========================
