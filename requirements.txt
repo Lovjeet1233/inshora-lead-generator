@@ -23,10 +23,11 @@ xmltodict
 
 # Async Support
 aiohttp
-
+langchain-text-splitters
 # Environment Variables
 python-dotenv
-
+faiss-cpu
+python-multipart
 # Email Validation
 pydantic[email]
 twilio

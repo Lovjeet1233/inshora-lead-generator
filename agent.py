@@ -8,6 +8,13 @@ from livekit.plugins.openai.realtime.realtime_model import TurnDetection
 
 
 from livekit.agents import (
+    cli,
+    WorkerOptions,
+    JobContext,
+    AgentSession,
+    RunContext,
+)
+from livekit.agents import (
     Agent,
     AgentSession,
     JobContext,
@@ -604,6 +611,65 @@ class TelephonyAgent(Agent):
             logger.error(f"Error adding note to AgencyZoom contact: {e}")
             return f"Error adding note: {str(e)}"
     
+    
+    async def before_llm_inference(self, ctx: RunContext):
+        """
+        Hook that runs BEFORE the LLM is called. We inject RAG context here
+        so the agent can speak immediately without tool call delays.
+        
+        This is a lifecycle hook, not a function tool - it runs automatically.
+        """
+        # Get the chat context
+        chat_ctx = ctx.chat_context
+        if not chat_ctx or not chat_ctx.messages:
+            return
+        
+        # Get the user's last message
+        last_message = chat_ctx.messages[-1]
+        if last_message.role != "user":
+            return
+        
+        user_query = last_message.content
+        logger.info(f"🔍 Proactive RAG search for: {user_query}")
+        
+        if not self.rag_service:
+            logger.warning("RAG service not available")
+            return
+        
+        try:
+            # Quick RAG search with timeout to prevent blocking
+            search_results = await asyncio.wait_for(
+                asyncio.to_thread(
+                    self.rag_service.retrieval_based_search,
+                    query=user_query,
+                    collections=["island"],  # Search all collections
+                    top_k=1  # Get top result only for speed
+                ),
+                timeout=0.5  # 1 second max to keep conversation flowing
+            )
+            
+            if search_results and len(search_results) > 0:
+                context = search_results[0].get('text', '').strip()
+                score = search_results[0].get('score', 0)
+                source = search_results[0].get('source', 'unknown')
+                
+                if context:
+                    # Inject context into the chat as a system message
+                    chat_ctx.append(
+                        role="system",
+                        text=f"Relevant context from knowledge base (relevance: {score:.2f}):\n{context}\n\nSource: {source}"
+                    )
+                    logger.info(f"✓ RAG context injected (score: {score:.2f})")
+            else:
+                logger.info("No RAG results found - using general knowledge")
+                
+        except asyncio.TimeoutError:
+            logger.warning("⚠️ RAG search timed out - continuing without context")
+        except Exception as e:
+            logger.error(f"RAG search error: {e}")
+            # Don't fail the conversation if RAG fails
+
+
     @function_tool()
     async def submit_collected_data_to_agencyzoom(self) -> str:
         """Submit all collected insurance data to AgencyZoom as a comprehensive lead.

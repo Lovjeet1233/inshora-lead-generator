@@ -9,11 +9,13 @@ import json
 from datetime import datetime
 from typing import Dict, Optional, List
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import openai
 from outboundService.services.call_service import make_outbound_call
+import tempfile
+import shutil
 
 from outboundService.common.update_config import update_config_async
 from models.model import OutboundCallRequest, StatusResponse
@@ -21,6 +23,7 @@ from services.insurance_service import InsuranceService
 from services.ams360 import AMS360Service
 from services.agencyzoom import AgencyZoomService
 from config import AGENT_SYSTEM_INSTRUCTIONS, CHATBOT_SYSTEM_INSTRUCTIONS, get_knowledge_base
+from RAGService import RAGService
 
 # Import routers
 from routers import sms, email
@@ -31,6 +34,13 @@ logger = logging.getLogger("unified-api")
 # Load Knowledge Base for chatbot
 KNOWLEDGE_BASE = get_knowledge_base()
 logger.info("Inshora Knowledge Base loaded successfully for chatbot")
+
+# Initialize RAG Service
+rag_service = RAGService(
+    openai_api_key=os.getenv("OPENAI_API_KEY"),
+    index_path="./faiss_index"
+)
+logger.info("RAG Service initialized successfully")
 
 
 # ===========================
@@ -144,7 +154,7 @@ class ChatRequest(BaseModel):
     """Request model for chat endpoint."""
     query: str
     thread_id: str
-    prompt: Optional[str] = None  # Custom system prompt (if None, uses default CHATBOT_SYSTEM_INSTRUCTIONS)
+    prompt: Optional[str] = None  # Custom instructions to append to CHATBOT_SYSTEM_INSTRUCTIONS (does not replace default)
     escalation_condition: Optional[str] = None  # Condition to trigger handover to human
     reset_escalation: bool = False  # Set to True to reset escalation and continue with bot
 
@@ -188,13 +198,17 @@ def get_or_create_thread(thread_id: str, custom_prompt: Optional[str] = None) ->
     
     Args:
         thread_id: Unique identifier for the conversation thread
-        custom_prompt: Optional custom system prompt. If None, uses default CHATBOT_SYSTEM_INSTRUCTIONS
+        custom_prompt: Optional custom system prompt to append to CHATBOT_SYSTEM_INSTRUCTIONS.
+                      If provided, it will be added after the default instructions.
     
     Returns:
         List of conversation messages for the thread
     """
-    # Determine which prompt to use
-    system_prompt = custom_prompt if custom_prompt is not None else CHATBOT_SYSTEM_INSTRUCTIONS
+    # Build the system prompt - append custom prompt to default instructions
+    if custom_prompt is not None and custom_prompt.strip():
+        system_prompt = f"{CHATBOT_SYSTEM_INSTRUCTIONS}\n\n{'='*50}\nADDITIONAL INSTRUCTIONS:\n{'='*50}\n{custom_prompt}"
+    else:
+        system_prompt = CHATBOT_SYSTEM_INSTRUCTIONS
     
     if thread_id not in conversation_threads:
         # Initialize with system message
@@ -204,8 +218,8 @@ def get_or_create_thread(thread_id: str, custom_prompt: Optional[str] = None) ->
                 "content": system_prompt
             }
         ]
-        prompt_type = "custom prompt" if custom_prompt else "default Inshora Knowledge Base"
-        logger.info(f"Created new conversation thread with {prompt_type}: {thread_id}")
+        prompt_type = "with custom instructions appended" if custom_prompt else "default instructions"
+        logger.info(f"Created new conversation thread {prompt_type}: {thread_id}")
     else:
         # Thread exists - update system message if custom prompt is provided
         if custom_prompt is not None:
@@ -213,7 +227,7 @@ def get_or_create_thread(thread_id: str, custom_prompt: Optional[str] = None) ->
                 "role": "system",
                 "content": system_prompt
             }
-            logger.info(f"Updated system prompt for existing thread: {thread_id}")
+            logger.info(f"Updated system prompt with custom instructions for thread: {thread_id}")
     
     return conversation_threads[thread_id]
 
@@ -432,6 +446,32 @@ def get_available_tools() -> List[Dict]:
                 "parameters": {
                     "type": "object",
                     "properties": {}
+                }
+            }
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_knowledge_base",
+                "description": "**MANDATORY FIRST STEP**: Search the Inshora knowledge base before answering ANY user question. You MUST call this tool for every query, even if the question seems unrelated to insurance. This ensures accurate, up-to-date information. Always search with collections=['inshora']. Only provide answers AFTER searching.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "query": {
+                            "type": "string",
+                            "description": "The user's question or search query. Pass the exact question they asked."
+                        },
+                        "collections": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "REQUIRED: Must be ['inshora'] to search the Inshora knowledge base."
+                        },
+                        "top_k": {
+                            "type": "integer",
+                            "description": "Number of results to return (default: 5)"
+                        }
+                    },
+                    "required": ["query", "collections"]
                 }
             }
         }
@@ -748,6 +788,44 @@ def execute_function_call(function_name: str, arguments: Dict, thread_id: str) -
             else:
                 return "Failed to submit data to AgencyZoom. The information is saved and can be submitted manually."
         
+        # RAG Service Functions
+        elif function_name == "search_knowledge_base":
+            query = arguments.get("query")
+            collections = arguments.get("collections", ["inshora"])  # Default to inshora
+            top_k = arguments.get("top_k", 5)
+            
+            logger.info(f"🔍 Searching knowledge base - Query: '{query}', Collections: {collections}")
+            
+            try:
+                results = rag_service.retrieval_based_search(
+                    query=query,
+                    collections=collections,
+                    top_k=top_k
+                )
+                
+                if not results:
+                    logger.info(f"No results found for query: '{query}'")
+                    return f"I searched the knowledge base for '{query}' but didn't find any relevant information. I'll provide a general response based on my training."
+                
+                # Format results for the chatbot
+                logger.info(f"Found {len(results)} results for query: '{query}'")
+                message = f"📚 Knowledge Base Results (found {len(results)} relevant document(s)):\n\n"
+                
+                for i, result in enumerate(results, 1):
+                    message += f"━━━━━━━━━━━━━━━━━━━━━━\n"
+                    message += f"Result #{i} (Relevance: {result['score']:.3f}):\n"
+                    message += f"Collection: {result['collection']}\n"
+                    message += f"Source: {result['source']}\n"
+                    message += f"\nContent:\n{result['text'][:500]}{'...' if len(result['text']) > 500 else ''}\n\n"
+                
+                message += "\n💡 Use the above information to answer the user's question accurately."
+                
+                return message
+                
+            except Exception as e:
+                logger.error(f"Error searching knowledge base: {e}", exc_info=True)
+                return f"Error searching knowledge base: {str(e)}. Proceeding with general knowledge."
+        
         else:
             return f"Unknown function: {function_name}"
     
@@ -769,7 +847,9 @@ async def chat(request: ChatRequest):
         request: ChatRequest containing:
             - query: User's message
             - thread_id: Conversation thread identifier
-            - prompt: Optional custom system prompt (if None, uses default CHATBOT_SYSTEM_INSTRUCTIONS)
+            - prompt: Optional custom instructions to append to default CHATBOT_SYSTEM_INSTRUCTIONS
+                Example: "You are friendly assistant of inshora group that assists user"
+                Note: This appends to (not replaces) the default instructions, preserving all tools and guidelines
             - escalation_condition: Optional condition to trigger handover to human
                 Example: "user asks to speak with a manager" or "user is frustrated"
             - reset_escalation: Set to True to reset escalation state and continue with bot
@@ -818,7 +898,7 @@ async def chat(request: ChatRequest):
         
         # Log if custom prompt is being used
         if request.prompt:
-            logger.info(f"Using custom prompt for thread: {request.thread_id}")
+            logger.info(f"Custom instructions appended to system prompt for thread: {request.thread_id}")
         
         # Add user message to conversation history
         messages.append({
@@ -1213,6 +1293,207 @@ async def reset_escalation_status(thread_id: str):
 # GENERAL ENDPOINTS
 # ===========================
 
+@app.post("/rag/ingest", tags=["RAG Knowledge Base"])
+async def ingest_data(
+    collection_name: str = Form("inshora"),
+    urls: Optional[str] = Form(None),  # Comma-separated URLs
+    pdfs: Optional[List[UploadFile]] = File(None),
+    csvs: Optional[List[UploadFile]] = File(None)
+):
+    """
+    Ingest data into the RAG knowledge base from multiple sources.
+    
+    Args:
+        collection_name: Name of the collection to store data in (default: "inshora")
+        urls: Comma-separated URLs to scrape data from (optional)
+        pdfs: Multiple PDF files to upload (optional)
+        csvs: Multiple CSV/Excel files to upload (optional)
+    
+    Returns:
+        Status of the ingestion operation
+    
+    Note: At least one data source (urls, pdfs, or csvs) must be provided.
+    
+    Example:
+        - Single PDF: Upload one PDF file
+        - Multiple PDFs: Select multiple PDF files
+        - URLs: Enter comma-separated URLs like "https://example.com/page1, https://example.com/page2"
+    """
+    try:
+        logger.info(f"Data ingestion request for collection: {collection_name}")
+        
+        if not urls and not pdfs and not csvs:
+            raise HTTPException(
+                status_code=400,
+                detail="At least one data source (urls, pdfs, or csvs) must be provided"
+            )
+        
+        temp_files = []
+        pdf_paths = []
+        excel_paths = []
+        url_list = []
+        
+        try:
+            # Parse URLs (comma-separated)
+            if urls:
+                url_list = [url.strip() for url in urls.split(',') if url.strip()]
+                logger.info(f"Processing {len(url_list)} URLs")
+            
+            # Handle multiple PDF files
+            if pdfs:
+                for pdf in pdfs:
+                    if not pdf.filename.lower().endswith('.pdf'):
+                        raise HTTPException(
+                            status_code=400, 
+                            detail=f"File '{pdf.filename}' must have .pdf extension"
+                        )
+                    
+                    # Save to temporary file
+                    temp_pdf = tempfile.NamedTemporaryFile(delete=False, suffix='.pdf')
+                    shutil.copyfileobj(pdf.file, temp_pdf)
+                    temp_pdf.close()
+                    pdf_paths.append(temp_pdf.name)
+                    temp_files.append(temp_pdf.name)
+                    logger.info(f"Saved PDF '{pdf.filename}' to temp file: {temp_pdf.name}")
+                
+                logger.info(f"Processing {len(pdf_paths)} PDF files")
+            
+            # Handle multiple CSV/Excel files
+            if csvs:
+                for csv in csvs:
+                    if not (csv.filename.lower().endswith('.csv') or 
+                           csv.filename.lower().endswith('.xlsx') or 
+                           csv.filename.lower().endswith('.xls')):
+                        raise HTTPException(
+                            status_code=400, 
+                            detail=f"File '{csv.filename}' must have .csv, .xlsx, or .xls extension"
+                        )
+                    
+                    # Determine suffix
+                    suffix = '.csv' if csv.filename.lower().endswith('.csv') else '.xlsx'
+                    
+                    # Save to temporary file
+                    temp_excel = tempfile.NamedTemporaryFile(delete=False, suffix=suffix)
+                    shutil.copyfileobj(csv.file, temp_excel)
+                    temp_excel.close()
+                    excel_paths.append(temp_excel.name)
+                    temp_files.append(temp_excel.name)
+                    logger.info(f"Saved CSV/Excel '{csv.filename}' to temp file: {temp_excel.name}")
+                
+                logger.info(f"Processing {len(excel_paths)} CSV/Excel files")
+            
+            # Load data into RAG service asynchronously
+            result = await rag_service.load_data_async(
+                collection_name=collection_name,
+                url_links=url_list if url_list else None,
+                pdf_files=pdf_paths if pdf_paths else None,
+                excel_files=excel_paths if excel_paths else None
+            )
+            
+            logger.info(f"Successfully ingested data into collection: {collection_name}")
+            
+            return {
+                "status": "success",
+                "message": f"Data successfully ingested into collection '{collection_name}'",
+                "details": result,
+                "collection_name": collection_name,
+                "sources_ingested": {
+                    "urls": len(url_list),
+                    "pdfs": len(pdf_paths),
+                    "csvs": len(excel_paths)
+                }
+            }
+        
+        finally:
+            # Clean up temporary files
+            for temp_file in temp_files:
+                try:
+                    os.unlink(temp_file)
+                    logger.info(f"Cleaned up temp file: {temp_file}")
+                except Exception as e:
+                    logger.warning(f"Could not delete temp file {temp_file}: {e}")
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error ingesting data: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error ingesting data: {str(e)}")
+
+
+@app.get("/rag/collections", tags=["RAG Knowledge Base"])
+async def get_collections():
+    """
+    Get the number of collections and their statistics.
+    
+    Returns:
+        Information about all collections in the knowledge base including
+        total vectors, number of collections, and chunks per collection.
+    """
+    try:
+        stats = rag_service.get_stats()
+        
+        collection_count = len(stats["collections"])
+        
+        return {
+            "status": "success",
+            "number_of_collections": collection_count,
+            "total_vectors": stats["total_vectors"],
+            "collections": stats["collections"],
+            "dimension": stats["dimension"],
+            "index_path": stats["index_path"]
+        }
+    
+    except Exception as e:
+        logger.error(f"Error getting collections: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error getting collections: {str(e)}")
+
+
+@app.delete("/rag/collection/{collection_name}", tags=["RAG Knowledge Base"])
+async def delete_collection(collection_name: str):
+    """
+    Delete a collection from the knowledge base.
+    
+    Args:
+        collection_name: Name of the collection to delete
+    
+    Returns:
+        Status of the deletion operation
+    
+    Note: This will remove all documents and vectors associated with the collection.
+    """
+    try:
+        logger.info(f"Deleting collection: {collection_name}")
+        
+        # Get stats before deletion to check if collection exists
+        stats = rag_service.get_stats()
+        
+        if collection_name not in stats["collections"]:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Collection '{collection_name}' not found"
+            )
+        
+        chunks_before = stats["collections"][collection_name]
+        
+        # Delete the collection
+        rag_service.delete_collection(collection_name)
+        
+        logger.info(f"Successfully deleted collection: {collection_name}")
+        
+        return {
+            "status": "success",
+            "message": f"Collection '{collection_name}' deleted successfully",
+            "chunks_removed": chunks_before,
+            "collection_name": collection_name
+        }
+    
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting collection: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail=f"Error deleting collection: {str(e)}")
+
+
 @app.get("/health", tags=["General"])
 async def health_check():
     """Health check endpoint."""
@@ -1231,10 +1512,11 @@ async def root():
         "version": "1.0.0",
         "description": "Comprehensive API for Insurance Chatbot, SMS, and Email services",
         "services": {
-            "chatbot": "AI-powered insurance chatbot with conversation memory",
+            "chatbot": "AI-powered insurance chatbot with conversation memory and knowledge base",
             "outbound": "AI-powered outbound voice calls via LiveKit SIP",
             "sms": "SMS messaging via Twilio",
-            "email": "Email service via SMTP"
+            "email": "Email service via SMTP",
+            "rag": "RAG-based knowledge base for document retrieval"
         },
         "endpoints": {
             "chatbot": {
@@ -1251,6 +1533,11 @@ async def root():
             },
             "email": {
                 "POST /email/send": "Send an email"
+            },
+            "rag": {
+                "POST /rag/ingest": "Ingest data into knowledge base (URL, PDF, CSV)",
+                "GET /rag/collections": "Get number of collections and statistics",
+                "DELETE /rag/collection/{collection_name}": "Delete a collection by name"
             },
             "general": {
                 "GET /health": "Health check",
