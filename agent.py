@@ -642,7 +642,7 @@ class TelephonyAgent(Agent):
                 asyncio.to_thread(
                     self.rag_service.retrieval_based_search,
                     query=user_query,
-                    collections=["island"],  # Search all collections
+                    collections=["inshora"],  # Search all collections
                     top_k=1  # Get top result only for speed
                 ),
                 timeout=0.5  # 1 second max to keep conversation flowing
